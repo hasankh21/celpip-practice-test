@@ -1,5 +1,5 @@
-// Answer Key page: shows correct answers + explanations for every section, and (where available)
-// the user's own saved answers/responses for comparison.
+// Answer Key page: shows correct answers + explanations for the currently selected test
+// (via the header Test selector), plus the user's own saved answers/responses for comparison.
 
 function renderAnswerKey(app, rest) {
   const initialTab = (rest && rest[0]) || "listening";
@@ -8,9 +8,10 @@ function renderAnswerKey(app, rest) {
   const wrap = el(`
     <div>
       <div class="card">
-        <span class="badge">Answer Key</span>
+        <span class="badge">Answer Key — Test ${AppState.get()}</span>
         <h1>Answer Key &amp; Explanations</h1>
         <p>Every objective question below shows the correct answer and a plain-English explanation of why it's correct. Writing and Speaking include model/sample responses with notes on what makes them strong, since those skills are scored holistically rather than with a single correct answer.</p>
+        <p class="small-muted">Reviewing a different test? Change the <strong>Test</strong> selector in the header.</p>
       </div>
       <div class="section-nav" id="akTabs"></div>
       <div id="akContent"></div>
@@ -61,20 +62,26 @@ function renderAnswerKey(app, rest) {
     return `<div class="option-row ${cls}"><span>${escapeHtml(opt)}${tag}</span></div>`;
   }
 
+  function noTestHtml(skillName) {
+    return `<div class="card"><p>Test ${AppState.get()} isn't available yet for ${skillName}. Try Test 1, or switch tests in the header.</p></div>`;
+  }
+
   function listeningKeyHtml() {
-    const saved = Store.get("listening");
+    const test = listeningTests.find((t) => t.testNumber === AppState.get());
+    if (!test) return noTestHtml("Listening");
+    const saved = Store.get(`listening_${AppState.get()}`);
     const userAnswers = (saved && saved.answers) || {};
     let html = "";
-    if (saved) {
+    if (saved && saved.score !== undefined) {
       html += `<div class="card"><strong>Your last attempt score: ${saved.score} / ${saved.total}</strong></div>`;
     }
-    listeningData.parts.forEach((part) => {
-      html += `<div class="card"><h2>${part.partLabel}: ${part.name}</h2>`;
+    test.parts.forEach((part) => {
+      html += `<div class="card" id="focus_${part.id}"><h2>${part.partLabel}: ${part.name}</h2>`;
       part.questions.forEach((q, qi) => {
         const key = `${part.id}_${qi}`;
         const userIdx = userAnswers[key];
         html += `
-          <div class="question-block" id="focus_${part.id}">
+          <div class="question-block">
             <strong>${qi + 1}. ${escapeHtml(q.q)}</strong>
             ${q.options.map((opt, oi) => optionRowHtml(opt, oi, q.correct, userIdx)).join("")}
             <div class="explain-box"><strong>Why:</strong> ${escapeHtml(q.explain)}</div>
@@ -87,15 +94,17 @@ function renderAnswerKey(app, rest) {
   }
 
   function readingKeyHtml() {
-    const saved = Store.get("reading");
+    const test = readingTests.find((t) => t.testNumber === AppState.get());
+    if (!test) return noTestHtml("Reading");
+    const saved = Store.get(`reading_${AppState.get()}`);
     const userAnswers = (saved && saved.answers) || {};
     let html = "";
-    if (saved) {
+    if (saved && saved.score !== undefined) {
       html += `<div class="card"><strong>Your last attempt score: ${saved.score} / ${saved.total}</strong></div>`;
     }
-    readingData.parts.forEach((part) => {
+    test.parts.forEach((part) => {
       html += `<div class="card" id="focus_${part.id}"><h2>${part.partLabel}: ${part.name}</h2>`;
-      if (part.id === "r1") {
+      if (part.blanks) {
         part.blanks.forEach((b) => {
           const key = `${part.id}_b${b.num}`;
           const userIdx = userAnswers[key];
@@ -126,10 +135,12 @@ function renderAnswerKey(app, rest) {
   }
 
   function writingKeyHtml() {
-    const saved = Store.get("writing");
+    const test = writingTests.find((t) => t.testNumber === AppState.get());
+    if (!test) return noTestHtml("Writing");
+    const saved = Store.get(`writing_${AppState.get()}`);
     const userResponses = (saved && saved.responses) || {};
     let html = "";
-    writingData.tasks.forEach((task) => {
+    test.tasks.forEach((task) => {
       const mine = userResponses[task.id];
       html += `
         <div class="card" id="focus_${task.id}">
@@ -155,8 +166,10 @@ function renderAnswerKey(app, rest) {
   }
 
   function speakingKeyHtml() {
+    const test = speakingTests.find((t) => t.testNumber === AppState.get());
+    if (!test) return noTestHtml("Speaking");
     let html = "";
-    speakingData.tasks.forEach((task) => {
+    test.tasks.forEach((task) => {
       html += `
         <div class="card" id="focus_${task.id}">
           <h2>${task.partLabel}: ${task.name}</h2>

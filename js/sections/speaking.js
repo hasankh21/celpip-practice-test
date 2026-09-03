@@ -1,207 +1,184 @@
-// Speaking section controller: timed prep + response per task, with optional mic recording for self-review.
-// Recordings stay in memory only for this session (never uploaded or persisted to storage).
+// Speaking section: jump to any task anytime, separate manual Prep/Response timers, and
+// fully manual Start/Stop recording — start and stop whenever you want, independent of the timers.
+// Recordings stay in memory for this browser session only; nothing is uploaded or persisted.
 
 function renderSpeaking(app) {
-  const data = speakingData;
-  let taskIndex = 0;
-  let timer = null;
-  let mediaStream = null;
-  let mediaRecorder = null;
-  let recordedChunks = [];
-  let completed = {};
-
   const wrap = el(`<div></div>`);
   app.appendChild(wrap);
 
-  function currentTask() {
-    return data.tasks[taskIndex];
+  let currentTaskIdx = 0;
+  let activeTimers = [];
+  let mediaStream = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordingUrl = null;
+  let isRecording = false;
+
+  function testNum() {
+    return AppState.get();
+  }
+  function getTest() {
+    return speakingTests.find((t) => t.testNumber === testNum());
+  }
+  function stateKey() {
+    return `speaking_${testNum()}`;
+  }
+  function loadState() {
+    return Store.get(stateKey()) || { completed: {} };
+  }
+  function markCompleted(taskId) {
+    const st = loadState();
+    st.completed[taskId] = true;
+    Store.set(stateKey(), st);
   }
 
-  function updateClock(remaining, total) {
-    const clock = document.getElementById("clockDisplay");
-    if (!clock) return;
-    clock.textContent = Timer.format(remaining);
-    clock.classList.toggle("low", remaining <= total * 0.25 && remaining > 5);
-    clock.classList.toggle("critical", remaining <= 5);
+  function destroyTimers() {
+    activeTimers.forEach((t) => t.destroy());
+    activeTimers = [];
   }
 
-  function stopMedia() {
-    if (mediaRecorder && mediaRecorder.state !== "inactive") {
-      try {
-        mediaRecorder.stop();
-      } catch (e) {}
-    }
+  function stopMediaTracks() {
     if (mediaStream) {
       mediaStream.getTracks().forEach((t) => t.stop());
       mediaStream = null;
     }
   }
 
-  function renderIntro() {
-    if (timer) timer.stop();
-    stopMedia();
-    const task = currentTask();
-    wrap.innerHTML = `
-      <div class="card">
-        <span class="badge">${data.title} — ${task.partLabel} of ${data.tasks.length}</span>
-        <h1>${task.name}</h1>
-        <p class="small-muted">Preparation time: ${task.prepSeconds}s · Response time: ${task.responseSeconds}s</p>
-        <p>When you click start, the task prompt will appear along with your preparation timer, just like the real test.</p>
-        <div class="actions">
-          <button onclick="window.__speakingStart()">Start ${task.partLabel}</button>
-          <button class="secondary" onclick="Router.go('home')">Exit</button>
-        </div>
-      </div>
-    `;
-    window.__speakingStart = startPrep;
-  }
-
-  function startPrep() {
-    const task = currentTask();
-    wrap.innerHTML = `
-      <div class="card">
-        <span class="badge">${task.partLabel} — Preparation</span>
-        <h2>${task.name}</h2>
-      </div>
-      <div class="timer-bar">
-        <div class="phase-label">Preparation time — plan your response, don't speak yet</div>
-        <div class="clock" id="clockDisplay">00:00</div>
-      </div>
-      <div class="card">
-        <div class="passage">${escapeHtml(task.prompt)}</div>
-      </div>
-    `;
-    timer = new Timer({
-      seconds: task.prepSeconds,
-      onTick: (r) => updateClock(r, task.prepSeconds),
-      onComplete: startResponse,
-    });
-    timer.start();
-  }
-
-  async function startResponse() {
-    const task = currentTask();
-    const isLast = taskIndex === data.tasks.length - 1;
-    wrap.innerHTML = `
-      <div class="card">
-        <span class="badge">${task.partLabel} — Speak Now</span>
-        <h2>${task.name}</h2>
-      </div>
-      <div class="timer-bar">
-        <div class="phase-label">Response time — speak your answer out loud now</div>
-        <div class="clock" id="clockDisplay">00:00</div>
-      </div>
-      <div class="card">
-        <div class="passage">${escapeHtml(task.prompt)}</div>
-        <div class="speaking-record-box" id="recBox">
-          <span class="small-muted">Checking microphone access...</span>
-        </div>
-      </div>
-    `;
-    timer = new Timer({
-      seconds: task.responseSeconds,
-      onTick: (r) => updateClock(r, task.responseSeconds),
-      onComplete: finishResponse,
-    });
-    timer.start();
-    await tryStartRecording();
-  }
-
-  async function tryStartRecording() {
-    const box = document.getElementById("recBox");
+  async function startRecording() {
+    if (isRecording) return;
     recordedChunks = [];
+    const statusEl = document.getElementById("recStatus");
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorder = new MediaRecorder(mediaStream);
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) recordedChunks.push(e.data);
       };
+      mediaRecorder.onstop = () => {
+        if (recordedChunks.length > 0) {
+          if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+          const blob = new Blob(recordedChunks, { type: "audio/webm" });
+          recordingUrl = URL.createObjectURL(blob);
+          renderPlayback();
+        }
+        stopMediaTracks();
+      };
       mediaRecorder.start();
-      if (box)
-        box.innerHTML = `<span class="rec-dot"></span> Recording your response for playback...`;
+      isRecording = true;
+      updateRecordingUi();
     } catch (e) {
-      if (box)
-        box.innerHTML = `<span class="small-muted">Microphone not available — speak your answer out loud; recording is skipped this time.</span>`;
+      if (statusEl)
+        statusEl.textContent = "Microphone access denied or unavailable — you can still practice speaking out loud.";
     }
   }
 
-  function finishResponse() {
-    const task = currentTask();
-    const isLast = taskIndex === data.tasks.length - 1;
-    completed[task.id] = true;
-
+  function stopRecording() {
+    if (!isRecording) return;
+    isRecording = false;
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
-      mediaRecorder.onstop = () => renderReview(task, isLast);
       mediaRecorder.stop();
-    } else {
-      renderReview(task, isLast);
     }
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((t) => t.stop());
-      mediaStream = null;
+    updateRecordingUi();
+  }
+
+  function updateRecordingUi() {
+    const statusEl = document.getElementById("recStatus");
+    const startBtn = document.getElementById("recStartBtn");
+    const stopBtn = document.getElementById("recStopBtn");
+    if (!statusEl) return;
+    if (isRecording) {
+      statusEl.innerHTML = `<span class="rec-dot"></span> Recording...`;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    } else {
+      statusEl.textContent = "Not recording";
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
     }
   }
 
-  function renderReview(task, isLast) {
-    let playbackHtml = `<p class="small-muted">No recording available for this attempt.</p>`;
-    if (recordedChunks.length > 0) {
-      const blob = new Blob(recordedChunks, { type: "audio/webm" });
-      const url = URL.createObjectURL(blob);
-      playbackHtml = `<audio controls src="${url}" style="width:100%; margin-top:10px;"></audio>
-        <p class="small-muted">This recording exists only in your browser for this session — it is not saved or uploaded anywhere.</p>`;
+  function renderPlayback() {
+    const box = document.getElementById("playbackBox");
+    if (!box) return;
+    if (recordingUrl) {
+      box.innerHTML = `
+        <audio controls src="${recordingUrl}" style="width:100%;"></audio>
+        <p class="small-muted">This recording exists only in your browser for this session — it is not saved or uploaded anywhere.</p>
+      `;
+    } else {
+      box.innerHTML = `<p class="small-muted">No recording yet for this task.</p>`;
     }
+  }
+
+  function render() {
+    destroyTimers();
+    stopRecording();
+    stopMediaTracks();
+    recordedChunks = [];
+    if (recordingUrl) {
+      URL.revokeObjectURL(recordingUrl);
+      recordingUrl = null;
+    }
+
+    const test = getTest();
+    if (!test) {
+      wrap.innerHTML = notAvailableHtml("Speaking", testNum());
+      return;
+    }
+    if (currentTaskIdx >= test.tasks.length) currentTaskIdx = 0;
+    const task = test.tasks[currentTaskIdx];
+
+    const prepWidget = createTimerWidget(task.prepSeconds, "Preparation Timer");
+    const responseWidget = createTimerWidget(task.responseSeconds, "Response Timer");
+
     wrap.innerHTML = `
       <div class="card">
-        <span class="badge">${task.partLabel} — Time's Up</span>
-        <h2>${task.name}</h2>
-        <p>Listen back to your response and compare it with the sample answer on the answer key page.</p>
-        ${playbackHtml}
-        <div class="actions">
-          <button onclick="window.__speakingNext()">${isLast ? "Finish Speaking Section" : "Next Task"}</button>
-          <button class="secondary" onclick="Router.go('answer-key/speaking/${task.id}')">View Sample Answer for This Task</button>
+        <span class="badge">Speaking — Test ${test.testNumber} — ${task.partLabel} of ${test.tasks.length}</span>
+        <h1>${task.name}</h1>
+      </div>
+      <div class="section-nav">${tabStripHtml(test.tasks, currentTaskIdx)}</div>
+      <div class="two-col">
+        <div>${prepWidget.html}</div>
+        <div>${responseWidget.html}</div>
+      </div>
+      <div class="card">
+        <div class="passage">${escapeHtml(task.prompt)}</div>
+      </div>
+      <div class="card">
+        <div class="speaking-record-box">
+          <div class="actions" style="justify-content:center; margin-top:0;">
+            <button type="button" id="recStartBtn">🎙 Start Recording</button>
+            <button type="button" class="secondary" id="recStopBtn" disabled>■ Stop Recording</button>
+          </div>
+          <p id="recStatus" class="small-muted">Not recording</p>
+          <p class="small-muted">Recording is fully manual — start and stop it whenever you're ready, independent of the timers above.</p>
         </div>
+        <div id="playbackBox" style="margin-top:12px;"></div>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="window.__speakingMarkDone('${task.id}')">Mark Task Complete</button>
+        <button class="secondary" onclick="Router.go('answer-key/speaking/${task.id}')">View Sample Answer for This Task</button>
       </div>
     `;
-    window.__speakingNext = goNext;
+
+    prepWidget.mount();
+    responseWidget.mount();
+    activeTimers.push(prepWidget, responseWidget);
+
+    wireTabStrip(wrap, (idx) => {
+      currentTaskIdx = idx;
+      render();
+    });
+    document.getElementById("recStartBtn").addEventListener("click", startRecording);
+    document.getElementById("recStopBtn").addEventListener("click", stopRecording);
+    renderPlayback();
   }
 
-  function goNext() {
-    if (timer) timer.stop();
-    if (taskIndex < data.tasks.length - 1) {
-      taskIndex += 1;
-      renderIntro();
-    } else {
-      finishSection();
-    }
-  }
+  window.__speakingMarkDone = (taskId) => {
+    markCompleted(taskId);
+    const btn = wrap.querySelector(`button[onclick="window.__speakingMarkDone('${taskId}')"]`);
+    if (btn) btn.textContent = "✓ Marked Complete";
+  };
 
-  function finishSection() {
-    Store.set("speaking", { completed, completedAt: Date.now() });
-    renderResults();
-  }
-
-  function renderResults() {
-    const flow = Store.get("fullTestFlow");
-    wrap.innerHTML = `
-      <div class="card score-hero">
-        <span class="badge">Speaking Complete</span>
-        <p>Great work finishing all 8 speaking tasks. Speaking is scored holistically — review the sample answers and notes on the answer key page to compare your approach.</p>
-        <div class="actions" style="justify-content:center;">
-          <button onclick="Router.go('answer-key/speaking')">View Sample Answers</button>
-          ${
-            flow && flow.active
-              ? `<button onclick="finishFullTest()">Finish Full Test</button>`
-              : `<button class="secondary" onclick="Router.go('home')">Back to Home</button>`
-          }
-        </div>
-      </div>
-    `;
-  }
-
-  renderIntro();
-}
-
-function finishFullTest() {
-  Store.set("fullTestFlow", { active: false });
-  Router.go("answer-key");
+  render();
 }

@@ -1,43 +1,38 @@
-// Reading section controller: each part has its own countdown timer matching the suggested exam pacing.
+// Reading section: jump to any part anytime, one manually-controlled timer per part.
+// Part 1 (Correspondence) renders its blanks as inline drop-downs directly inside the reply text.
 
 function renderReading(app) {
-  const data = readingData;
-  let partIndex = 0;
-  let answers = {}; // key -> selected option index (works for both `questions` and `blanks`)
-  let timer = null;
-
   const wrap = el(`<div></div>`);
   app.appendChild(wrap);
 
-  function currentPart() {
-    return data.parts[partIndex];
+  let currentPartIdx = 0;
+  let showResults = false;
+  let activeTimers = [];
+
+  function testNum() {
+    return AppState.get();
+  }
+  function getTest() {
+    return readingTests.find((t) => t.testNumber === testNum());
+  }
+  function stateKey() {
+    return `reading_${testNum()}`;
+  }
+  function loadState() {
+    return Store.get(stateKey()) || { answers: {} };
+  }
+  function saveAnswer(key, oi) {
+    const st = loadState();
+    st.answers[key] = oi;
+    Store.set(stateKey(), st);
   }
 
-  function updateClock(remaining, total) {
-    const clock = document.getElementById("clockDisplay");
-    if (!clock) return;
-    clock.textContent = Timer.format(remaining);
-    clock.classList.toggle("low", remaining <= total * 0.25 && remaining > 30);
-    clock.classList.toggle("critical", remaining <= 30);
+  function destroyTimers() {
+    activeTimers.forEach((t) => t.destroy());
+    activeTimers = [];
   }
 
-  function timerBarHtml() {
-    return `
-      <div class="timer-bar">
-        <div class="phase-label">Time remaining for this part</div>
-        <div class="clock" id="clockDisplay">00:00</div>
-      </div>
-    `;
-  }
-
-  window.__readingAnswer = (key, oi) => {
-    answers[key] = oi;
-    document.querySelectorAll(`input[name="${key}"]`).forEach((inp, idx) => {
-      inp.closest(".option-row").classList.toggle("selected", idx === oi);
-    });
-  };
-
-  function standardQuestionsHtml(part) {
+  function standardQuestionsHtml(part, answers) {
     return part.questions
       .map((q, qi) => {
         const key = `${part.id}_${qi}`;
@@ -49,9 +44,9 @@ function renderReading(app) {
             .map(
               (opt, oi) => `
             <label class="option-row ${selected === oi ? "selected" : ""}">
-              <input type="radio" name="${key}" value="${oi}" ${
+              <input type="radio" name="${key}" data-key="${key}" data-oi="${oi}" class="ans-radio" ${
                 selected === oi ? "checked" : ""
-              } onchange="window.__readingAnswer('${key}', ${oi})" />
+              } />
               <span>${escapeHtml(opt)}</span>
             </label>
           `
@@ -63,31 +58,38 @@ function renderReading(app) {
       .join("");
   }
 
-  function correspondenceHtml(part) {
-    const replyText = part.replyTemplate.join("\n\n");
-    const blanksHtml = part.blanks
-      .map((b) => {
-        const key = `${part.id}_b${b.num}`;
-        const selected = answers[key];
-        return `
-        <div class="question-block">
-          <strong>Blank (${b.num})</strong>
-          ${b.options
+  // Renders the reply text with each ___(n)___ marker replaced by an inline <select> — the
+  // authentic CELPIP Part 1 cloze format, rather than a separate question list.
+  function correspondenceHtml(part, answers) {
+    const blanksByNum = {};
+    part.blanks.forEach((b) => (blanksByNum[b.num] = b));
+
+    const paragraphsHtml = part.replyTemplate
+      .map((paragraph) => {
+        const withSelects = paragraph.replace(/___\((\d+)\)___/g, (match, numStr) => {
+          const num = parseInt(numStr, 10);
+          const b = blanksByNum[num];
+          if (!b) return match;
+          const key = `${part.id}_b${num}`;
+          const selected = answers[key];
+          const options = b.options
             .map(
-              (opt, oi) => `
-            <label class="option-row ${selected === oi ? "selected" : ""}">
-              <input type="radio" name="${key}" value="${oi}" ${
-                selected === oi ? "checked" : ""
-              } onchange="window.__readingAnswer('${key}', ${oi})" />
-              <span>${escapeHtml(opt)}</span>
-            </label>
-          `
+              (opt, oi) =>
+                `<option value="${oi}" ${selected === oi ? "selected" : ""}>${escapeHtml(opt)}</option>`
             )
-            .join("")}
-        </div>
-      `;
+            .join("");
+          return `<select class="inline-blank ans-select" data-key="${key}" data-blank-num="${num}"><option value="" ${
+            selected === undefined ? "selected" : ""
+          } disabled>(${num})</option>${options}</select>`;
+        });
+        return `<p>${withSelects}</p>`;
       })
       .join("");
+
+    const legendHtml = part.blanks
+      .map((b) => `<span class="blank-legend-item">(${b.num})</span>`)
+      .join(" ");
+
     return `
       <div class="two-col">
         <div>
@@ -96,132 +98,139 @@ function renderReading(app) {
         </div>
         <div>
           <h3>${part.replyTitle}</h3>
-          <div class="passage">${escapeHtml(replyText)}</div>
+          <div class="passage cloze-passage">${paragraphsHtml}</div>
         </div>
       </div>
-      <h3>Choose the best option for each blank</h3>
-      ${blanksHtml}
+      <p class="small-muted">Blanks in this reply: ${legendHtml} — choose the best option for each one from its drop-down.</p>
     `;
   }
 
-  function diagramHtml(part) {
+  function diagramHtml(part, answers) {
     return `
       <h3>${part.passageTitle}</h3>
       ${part.diagramHtml}
-      ${standardQuestionsHtml(part)}
+      ${standardQuestionsHtml(part, answers)}
     `;
   }
 
-  function passageHtml(part) {
+  function passageHtml(part, answers) {
     return `
       <h3>${part.passageTitle}</h3>
       <div class="passage">${escapeHtml(part.passage)}</div>
-      ${standardQuestionsHtml(part)}
+      ${standardQuestionsHtml(part, answers)}
     `;
   }
 
-  function bodyForPart(part) {
-    if (part.id === "r1") return correspondenceHtml(part);
-    if (part.id === "r2") return diagramHtml(part);
-    return passageHtml(part);
+  function bodyForPart(part, answers) {
+    if (part.blanks) return correspondenceHtml(part, answers);
+    if (part.diagramHtml) return diagramHtml(part, answers);
+    return passageHtml(part, answers);
   }
 
-  function renderIntro() {
-    if (timer) timer.stop();
-    const part = currentPart();
-    wrap.innerHTML = `
-      <div class="card">
-        <span class="badge">${data.title} — ${part.partLabel} of ${data.parts.length}</span>
-        <h1>${part.name}</h1>
-        <p>${part.instructions}</p>
-        <p class="small-muted">Suggested time for this part: ${part.suggestedMinutes} minutes.</p>
-        <div class="actions">
-          <button onclick="window.__readingStart()">Start ${part.partLabel}</button>
-          <button class="secondary" onclick="Router.go('home')">Exit</button>
-        </div>
-      </div>
-    `;
-    window.__readingStart = startPart;
-  }
-
-  function startPart() {
-    const part = currentPart();
-    const isLast = partIndex === data.parts.length - 1;
-    wrap.innerHTML = `
-      <div class="card">
-        <span class="badge">${part.partLabel}</span>
-        <h2>${part.name}</h2>
-      </div>
-      ${timerBarHtml()}
-      <div class="card">${bodyForPart(part)}</div>
-      <div class="actions">
-        <button onclick="window.__readingNext()">${
-          isLast ? "Finish Reading Section" : "Next Part"
-        }</button>
-      </div>
-    `;
-    window.__readingNext = goNext;
-    const seconds = part.suggestedMinutes * 60;
-    timer = new Timer({
-      seconds,
-      onTick: (r) => updateClock(r, seconds),
-      onComplete: goNext,
+  function wireInputs() {
+    wrap.querySelectorAll(".ans-radio").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        const key = inp.dataset.key;
+        const oi = parseInt(inp.dataset.oi, 10);
+        saveAnswer(key, oi);
+        wrap.querySelectorAll(`input[name="${key}"]`).forEach((other, idx) => {
+          other.closest(".option-row").classList.toggle("selected", idx === oi);
+        });
+      });
     });
-    timer.start();
+    wrap.querySelectorAll(".ans-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const key = sel.dataset.key;
+        const oi = parseInt(sel.value, 10);
+        saveAnswer(key, oi);
+      });
+    });
   }
 
-  function goNext() {
-    if (timer) timer.stop();
-    if (partIndex < data.parts.length - 1) {
-      partIndex += 1;
-      renderIntro();
-    } else {
-      finishSection();
-    }
-  }
+  window.__readingFinish = () => {
+    showResults = true;
+    render();
+  };
+  window.__readingBackToTest = () => {
+    showResults = false;
+    render();
+  };
 
-  function finishSection() {
+  function computeScore(test, answers) {
     let score = 0,
       total = 0;
-    data.parts.forEach((part) => {
-      if (part.id === "r1") {
+    test.parts.forEach((part) => {
+      if (part.blanks) {
         part.blanks.forEach((b) => {
           total += 1;
-          const key = `${part.id}_b${b.num}`;
-          if (answers[key] === b.correct) score += 1;
+          if (answers[`${part.id}_b${b.num}`] === b.correct) score += 1;
         });
       } else {
         part.questions.forEach((q, qi) => {
           total += 1;
-          const key = `${part.id}_${qi}`;
-          if (answers[key] === q.correct) score += 1;
+          if (answers[`${part.id}_${qi}`] === q.correct) score += 1;
         });
       }
     });
-    Store.set("reading", { answers, score, total, completedAt: Date.now() });
-    renderResults(score, total);
+    return { score, total };
   }
 
-  function renderResults(score, total) {
-    const flow = Store.get("fullTestFlow");
+  function renderResults(test) {
+    const state = loadState();
+    const { score, total } = computeScore(test, state.answers);
+    Store.set(stateKey(), { ...state, score, total, completedAt: Date.now() });
     wrap.innerHTML = `
       <div class="card score-hero">
-        <span class="badge">Reading Complete</span>
+        <span class="badge">Reading — Test ${test.testNumber} Complete</span>
         <div class="score-num">${score} / ${total}</div>
         <p>Correct answers</p>
         <div class="actions" style="justify-content:center;">
-          <button onclick="Router.go('answer-key/reading')">Review Answer Key</button>
-          ${
-            flow && flow.active
-              ? `<button onclick="Router.go('break/writing/${encodeURIComponent(
-                  "Writing"
-                )}')">Continue to Writing</button>`
-              : `<button class="secondary" onclick="Router.go('home')">Back to Home</button>`
-          }
+          <button onclick="window.__readingBackToTest()">Back to Test</button>
+          <button class="secondary" onclick="Router.go('answer-key/reading')">Review Answer Key</button>
         </div>
       </div>
     `;
   }
 
-  renderIntro();
+  function render() {
+    destroyTimers();
+    const test = getTest();
+    if (!test) {
+      wrap.innerHTML = notAvailableHtml("Reading", testNum());
+      return;
+    }
+    if (showResults) {
+      renderResults(test);
+      return;
+    }
+    if (currentPartIdx >= test.parts.length) currentPartIdx = 0;
+    const state = loadState();
+    const part = test.parts[currentPartIdx];
+    const seconds = part.suggestedMinutes * 60;
+    const timerWidget = createTimerWidget(seconds, `Suggested time for this part: ${part.suggestedMinutes} min`);
+
+    wrap.innerHTML = `
+      <div class="card">
+        <span class="badge">Reading — Test ${test.testNumber} — ${part.partLabel} of ${test.parts.length}</span>
+        <h1>${part.name}</h1>
+        <p>${part.instructions}</p>
+      </div>
+      <div class="section-nav">${tabStripHtml(test.parts, currentPartIdx)}</div>
+      ${timerWidget.html}
+      <div class="card">${bodyForPart(part, state.answers)}</div>
+      <div class="actions">
+        <button onclick="window.__readingFinish()">Finish &amp; See Score for Test ${test.testNumber}</button>
+      </div>
+    `;
+
+    timerWidget.mount();
+    activeTimers.push(timerWidget);
+    wireTabStrip(wrap, (idx) => {
+      currentPartIdx = idx;
+      render();
+    });
+    wireInputs();
+  }
+
+  render();
 }

@@ -303,6 +303,84 @@ footer.app-footer {
   padding: 30px 12px;
 }
 
+.test-select-wrap {
+  margin-left: 18px;
+}
+.test-select-wrap select {
+  background: #10416e;
+  color: #fff;
+  border: 1px solid #2f6aa8;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.timer-widget {
+  background: #eef3fa;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.timer-widget .timer-widget-label {
+  font-weight: 600;
+  color: var(--blue-dark);
+  font-size: 0.88rem;
+  margin-bottom: 6px;
+}
+.timer-widget .clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--green);
+}
+.timer-widget .clock.low { color: var(--amber); }
+.timer-widget .clock.critical { color: var(--red); animation: pulse 1s infinite; }
+.timer-widget.time-up { border-color: var(--red); }
+.timer-widget .timer-controls {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.timer-widget .timer-controls button {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+}
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.audio-controls .progress-track { flex-basis: 100%; }
+
+.cloze-passage p { margin: 0 0 14px; }
+select.inline-blank {
+  font-family: inherit;
+  font-size: 0.92rem;
+  padding: 2px 6px;
+  border: 1px solid var(--blue);
+  border-radius: 5px;
+  background: #eef3fa;
+  color: var(--blue-dark);
+  font-weight: 600;
+  margin: 0 2px;
+}
+.blank-legend-item {
+  display: inline-block;
+  background: #eef3fa;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-right: 3px;
+  font-weight: 600;
+  color: var(--blue-dark);
+}
+
 .disclaimer {
   font-size: 0.8rem;
   color: var(--muted);
